@@ -1,0 +1,64 @@
+# Notion control plane — IDs from REVOPS_AI_TEAM_HANDOFF.md §5.
+# Property names/types below were verified against the live databases on 2026-10-12.
+# If someone renames a property in Notion, update it here (and nowhere else).
+
+api_version: "2025-09-03"   # data-source-aware API; pages are created under data_source_id parents
+
+parent_page_id: 3f7334ab-4b6a-81d6-b1d3-e134aad76da4   # "RevOps AI Team" (still private — move to a teamspace before go-live)
+
+databases:
+  team_roster:
+    database_id: ee18db340aa846f9bee1d78b7f185d13
+    data_source_id: ec2c0903-399d-4357-a62c-acc389565ccf
+    properties:
+      name: Name                  # title
+      title: Title                # text
+      level: Level                # select: Manager / Junior
+      reports_to: Reports To      # text
+      vertical: Vertical          # text
+      responsibilities: Responsibilities  # text
+      tools: Tools                # multi_select
+      schedule: Schedule          # text
+      status: Status              # select: Active / Onboarding / Paused
+      human_owner: Human Owner    # person
+
+  work_log:
+    database_id: 56142807e40145918c1328471dc03639
+    data_source_id: 482250f2-0412-4142-bd65-b27d2a88159c
+    properties:
+      run: Run                    # title — "<Employee> · <Task> · <YYYY-MM-DD>"
+      employee: Employee          # relation → Team Roster
+      task: Task                  # text
+      run_date: Run Date          # date
+      result: Result              # select: Success / Partial / Failed / Blocked on human
+      summary: Summary            # text
+      output_link: Output Link    # url
+      slack_link: Slack Link      # url
+      reviewed: Reviewed by Abby  # checkbox
+
+  input_requests:
+    database_id: f0d971a2ab6045babba8d5d193888fe8
+    data_source_id: ac7f7de7-e665-4443-b3dc-1ce5b54f0004
+    properties:
+      question: Question          # title
+      asked_by: Asked By          # relation → Team Roster
+      asked_to: Asked To          # person
+      context: Context            # text
+      due: Due                    # date
+      status: Status              # select: Open / Answered / Overdue / Escalated / Closed
+      answer: Answer              # text
+      slack_thread: Slack Thread  # url
+
+  task_intake:
+    database_id: ea7f93419e964c948bf8f07e412d2a59
+    data_source_id: 4b8e657c-5d65-46ba-acdd-8d676090c5f8
+    properties:
+      task: Task                  # title
+      requested_by: Requested By  # person
+      description: Description
+      audience: Audience
+      cadence: Cadence            # Daily / Weekly / Monthly / Ad hoc
+      data_sources: Data Sources
+      needs_human_input: Needs Human Input  # checkbox
+      assigned_to: Assigned To    # relation → Team Roster
+      status: Status              # New / Scoping / Building / Live / Declined

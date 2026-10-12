@@ -1,0 +1,13 @@
+# Humans the AI team talks to: escalation points and people who answer Input Requests.
+# notion_user_id fills the "Asked To" / "Human Owner" person properties.
+# email is used to find the person's Slack user (needs users:read.email).
+# slack_user_id is optional — set it to skip the email lookup.
+#
+# TODO(open decision #5): fill these in and add other owners/escalation points.
+
+humans:
+  satiesh:
+    name: Satiesh
+    email: null            # TODO
+    notion_user_id: null   # TODO — Notion → Settings → People, or ask Claude to look it up
+    slack_user_id: null

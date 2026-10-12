@@ -1,0 +1,45 @@
+name: Rick · Pipeline Tracker
+
+# Phase 1: manual trigger only. Runs the job-contract smoke test as Rick.
+# Phase 2: add the cron below and swap the smoke test for the headless Claude run.
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "dry-run (prints payloads) or live (writes to Notion + Slack)"
+        type: choice
+        options: [dry-run, live]
+        default: dry-run
+  # schedule:
+  #   - cron: "0 6 * * 1-5"   # TODO(open decision #4): weekdays 06:00 UTC; mirror in config/employees.yaml
+
+concurrency: rick-pipeline-tracker
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      REVOPS_MODE: ${{ inputs.mode || 'live' }}
+      NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+      SLACK_CHANNEL_ID: ${{ vars.SLACK_CHANNEL_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+
+      - name: Job contract smoke test (Phase 1)
+        run: python -m lib.cli smoke-test --employee rick
+
+      # Phase 2 — headless Claude Code run as Rick:
+      # - run: npm install -g @anthropic-ai/claude-code
+      # - name: Rick runs the Pipeline Tracker
+      #   env:
+      #     ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      #     GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
+      #   run: |
+      #     claude -p "You are Rick. Follow .claude/agents/rick.md and run the pipeline-tracker skill under the job-contract skill." \
+      #       --allowedTools "Bash(python -m lib.cli:*),Read,Grep,Glob,Skill"

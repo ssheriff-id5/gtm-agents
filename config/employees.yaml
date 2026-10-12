@@ -1,0 +1,57 @@
+# The team. One entry per AI employee; the key is what you pass to `--employee`.
+# Notion is the source of truth for job descriptions (Team Roster); this file holds
+# only what code needs to act *as* the employee (identity, IDs, schedule).
+#
+# schedule.cron is in UTC (GitHub Actions cron is UTC). Keep it in sync with the
+# matching .github/workflows/*.yml — Abby uses it to decide which runs were "expected".
+
+team:
+  timezone: UTC                     # TODO(open decision #4): confirm team timezone for Run Date / due dates
+  slack_channel: "#revops-ai-team"  # TODO(open decision #2): replace with the channel ID (C0123...) once created
+  human_owner: satiesh              # key into config/humans.yaml — default escalation point
+
+employees:
+  abby:
+    display_name: Abby
+    title: AI RevOps Manager
+    level: Manager
+    reports_to: satiesh
+    notion_page_id: 3f7334ab-4b6a-8145-bad2-ca9dacc25161
+    slack:
+      username: "Abby (AI RevOps Manager)"
+      icon_emoji: ":female-office-worker:"   # TODO(open decision #3): swap for icon_url when avatars exist
+      icon_url: null
+    schedule:
+      description: Daily, after Rick and Stevey's runs
+      cron: null                    # Phase 3
+
+  rick:
+    display_name: Rick
+    title: AI Jr RevOps
+    level: Junior
+    reports_to: abby
+    notion_page_id: 3f7334ab-4b6a-81e8-be22-cae100e1ce25
+    slack:
+      username: "Rick (AI Jr RevOps)"
+      icon_emoji: ":male-technologist:"
+      icon_url: null
+    schedule:
+      description: "Pipeline Tracker: per current rollout (test sheet → daily → live)"
+      cron: null                    # Phase 2 — set when the Pipeline Tracker is ported
+    tasks:
+      - pipeline-tracker
+
+  stevey:
+    display_name: Stevey
+    title: AI Jr RevOps
+    level: Junior
+    reports_to: abby
+    notion_page_id: 3f7334ab-4b6a-81de-a8d3-ec135c9093b0
+    slack:
+      username: "Stevey (AI Jr RevOps)"
+      icon_emoji: ":male-office-worker:"
+      icon_url: null
+    schedule:
+      description: TBD
+      cron: null
+    tasks: []

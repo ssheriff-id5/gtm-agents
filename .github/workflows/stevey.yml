@@ -1,0 +1,27 @@
+name: Stevey
+
+# Placeholder until Stevey is assigned work through Task Intake.
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        type: choice
+        options: [dry-run, live]
+        default: dry-run
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      REVOPS_MODE: ${{ inputs.mode }}
+      NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+      SLACK_CHANNEL_ID: ${{ vars.SLACK_CHANNEL_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: python -m lib.cli smoke-test --employee stevey
