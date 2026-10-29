@@ -85,6 +85,8 @@ def cmd_smoke_test(args) -> int:
 
 def cmd_leads_pending(args) -> int:
     """Web-form leads not yet posted to #webform, as briefs for Claude to research."""
+    if not args.zoho_json:
+        _banner()
     if bool(args.zoho_json) != bool(args.posted_text):
         raise config.ConfigError("--zoho-json and --posted-text go together")
     leads = (lead_triage.pending_from_files(args.zoho_json, args.posted_text) if args.zoho_json
@@ -191,7 +193,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json-file", help="Also write the briefs JSON here")
     p.add_argument("--zoho-json", help="Connector mode: Zoho Leads response saved to a file")
     p.add_argument("--posted-text", help="Connector mode: recent #webform history saved to a file")
-    p.set_defaults(fn=cmd_leads_pending)
+    p.set_defaults(fn=cmd_leads_pending, banner=False)  # banner only when it calls the APIs
 
     p = sub.add_parser("lead-post", help="Validate a lead assessment and post it to #webform")
     p.add_argument("--assessment", required=True, help="Path to the assessment JSON")
@@ -201,7 +203,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--assessment", required=True)
     p.add_argument("--zoho-json", required=True, help="The same Zoho Leads file used for leads-pending")
     p.add_argument("--style", choices=("markdown", "mrkdwn"), default="markdown")
-    p.set_defaults(fn=cmd_lead_render)
+    p.set_defaults(fn=cmd_lead_render, banner=False)  # sends nothing, in any mode
 
     p = sub.add_parser("leads-verify", help="Fail if any of the given leads isn't in #webform")
     p.add_argument("--ids-file", required=True)
@@ -217,7 +219,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     dryrun.QUIET = args.quiet
-    _banner()
+    if getattr(args, "banner", True):
+        _banner()
     try:
         return args.fn(args)
     except config.ConfigError as exc:
