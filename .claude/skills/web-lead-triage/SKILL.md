@@ -5,27 +5,37 @@ description: Triage new website "Contact Us" leads from Zoho. Spam-check each on
 
 # Web lead triage
 
-**Owner:** Satiesh. Posts go out from his Slack account to `#webform`, where the team reviews them. Satiesh then approves the lead in Zoho and assigns it. **You never approve, reject, edit or assign anything in Zoho.** You only read.
+**Owner:** Satiesh. **Schedule:** twice a day, around 8am and 2pm ET (Claude scheduled task). Posts go out from his Slack account to `#webform`, where the team reviews them. Satiesh then approves the lead in Zoho and assigns it. **You never approve, reject, edit or assign anything in Zoho.** You only read.
 
 ## Two ways this runs
-- **Connector mode (current, the hourly scheduled task):** Zoho and Slack are read and written through the connected **Zoho CRM** and **Slack** tools. Clay is used for people lookups when it's connected. `lib.cli` only does the deterministic parts (filtering, dedupe, validation, formatting) and needs no credentials.
+- **Connector mode (current, the twice-daily scheduled task):** Zoho and Slack are read and written through the connected **Zoho CRM** and **Slack** tools. Clay is used for people lookups when it's connected. `lib.cli` only does the deterministic parts (filtering, dedupe, validation, formatting) and needs no credentials.
 - **CI mode (later, GitHub Actions):** `lib.cli` calls Zoho and Slack itself using repo secrets. See `.github/workflows/web-lead-triage.yml`. The steps marked *(CI)* below apply only to this mode.
 
 Work from the repo root. Put everything in `out/leads/` (create it).
 
 ## 1. Get the new leads
+Each run picks up from **the last lead already posted** in #webform. Every post shows `🕒 Received: <date time> ET`. The run pulls everything submitted after the newest of those, and always covers at least the last 7 days so a lead that failed to post is retried. Leads already posted are skipped by their `Zoho lead ID`.
+
 **Connector mode:**
-1. Zoho CRM `getRecords`: module `Leads`, `fields` = `First_Name,Last_Name,Email,Company,Company_Types,City,Primary_Country,Lead_Source,Description,Designation,Website,Created_Time,Owner`, `sort_by` = `Created_Time`, `sort_order` = `desc`, `per_page` = 100. Use `getRecords`, not a COQL query: COQL leaves out leads that are still waiting for approval, which are exactly the ones we want. Save the tool result **exactly as returned** to `out/leads/zoho.json`. If the result was too large and the harness saved it to a file, copy that file. Don't edit or retype any values. The lead's message is posted from this file.
-2. Slack `slack_read_channel`: channel `C0CCE3370AD` (#webform), `limit` 100, `oldest` = the Unix timestamp 8 days ago. Save the whole result text to `out/leads/webform.txt`. If more pages exist, append them too.
-3. Run:
+1. **Read #webform first.** Slack `slack_read_channel`: channel `C0CCE3370AD`, `limit` 100, **no** `oldest`. Save the whole result text to `out/leads/webform.txt`.
+2. **Work out how far back to go:**
+   ```bash
+   python -m lib.cli leads-since --posted-text out/leads/webform.txt
+   ```
+   This prints `{"pull_since": "<ISO time>", "last_lead_posted": ...}`.
+3. **Pull leads from Zoho back to `pull_since`.** Zoho CRM `getRecords`: module `Leads`, `fields` = `First_Name,Last_Name,Email,Company,Company_Types,City,Primary_Country,Lead_Source,Description,Designation,Website,Created_Time,Owner`, `sort_by` = `Created_Time`, `sort_order` = `desc`, `per_page` = 100.
+   - Use `getRecords`, **not** a COQL query: COQL leaves out leads still waiting for approval, which are exactly the ones we want.
+   - Save each page **exactly as returned** to `out/leads/zoho-1.json`, `zoho-2.json`, and so on. Don't edit or retype values; the lead's message is posted from these files. If the harness saved a large result to a file, copy that file.
+   - Fetch the next page (`page_token` from `info.next_page_token`) only while the last record's `Created_Time` is still after `pull_since` **and** `info.more_records` is true.
+4. Run:
 ```bash
-python -m lib.cli --quiet leads-pending --zoho-json out/leads/zoho.json --posted-text out/leads/webform.txt \
-  --ids-file out/leads/pending.txt --json-file out/leads/pending.json
+python -m lib.cli leads-pending --zoho-json out/leads/zoho-*.json --posted-text out/leads/webform.txt \
+  --ids-file out/leads/pending.txt --json-file out/leads/pending.json > /dev/null
 ```
 
 *(CI)*: the workflow has already written `out/leads/pending.json`.
 
-`pending.json` is the list of web-form leads from the last 7 days (and after the go-live cutoff in `config/lead_triage.yaml`) that haven't been posted to #webform yet. Each item has the form fields **verbatim**, plus `approve_url`. **If the list is empty, stop. Post nothing.**
+`pending.json` is the list of web-form leads in that range (never before the go-live cutoff in `config/lead_triage.yaml`) that haven't been posted to #webform yet. Each item has the form fields **verbatim**, plus `approve_url`. **If the list is empty, stop. Post nothing.**
 
 Do steps 2–5 for **every** lead in the list. Don't skip one because it looks boring. A posted Spam verdict is still useful.
 
@@ -111,10 +121,10 @@ Write one JSON file per lead to `out/leads/<lead_id>.json`:
 ## 6. Post it
 **Connector mode:**
 ```bash
-python -m lib.cli --quiet lead-render --assessment out/leads/<lead_id>.json --zoho-json out/leads/zoho.json
+python -m lib.cli lead-render --assessment out/leads/<lead_id>.json --zoho-json out/leads/zoho-*.json
 ```
 This validates the JSON (if it fails, fix the JSON and run it again) and prints `{channel, lead_id, main, thread}`. Then:
-1. `slack_send_message` with `channel_id` = `channel` and `message` = `main`, **exactly as printed**. Don't reword, trim or add anything. The text already contains the verbatim submission, the approve link and the `Zoho lead ID` that dedupe relies on. Note the returned message `ts`.
+1. `slack_send_message` with `channel_id` = `channel` and `message` = `main`, **exactly as printed**. Don't reword, trim or add anything. The text already contains the verbatim submission, the time it came in, the approve link and the `Zoho lead ID`. The next run relies on the last two. Note the returned message `ts`.
 2. `slack_send_message` with the same channel, `thread_ts` = that `ts` and `message` = `thread`.
 
 If a send fails, retry once. If it still fails, carry on with the other leads.

@@ -151,12 +151,29 @@ class ConnectorModeTests(unittest.TestCase):
         self.assertEqual(self._pending("Review & approve in Zoho · Zoho lead ID: 900000000000000002"),
                          ["900000000000000001"])
 
+    def test_pulls_from_last_lead_posted(self):
+        later = datetime(2099, 1, 20, tzinfo=timezone.utc)  # 19 days after the fixture leads
+        with open(self.posted, "w") as fh:
+            fh.write("nothing posted yet")
+        self.assertEqual(lead_triage.pending_from_files(self.zoho, self.posted, now=later), [])  # 7-day window only
+        with open(self.posted, "w") as fh:  # last lead posted came in before the fixture leads
+            fh.write("🕒 Received: 2098-12-31 09:00 ET (Wed) · Zoho lead ID: 123456789012345")
+        ids = [lead["id"] for lead in lead_triage.pending_from_files(self.zoho, self.posted, now=later)]
+        self.assertEqual(ids, ["900000000000000002", "900000000000000001"])
+
+    def test_pull_since_keeps_retry_window(self):
+        now = datetime(2099, 1, 20, tzinfo=timezone.utc)
+        recent = lead_triage.pull_since("Received: 2099-01-19 10:00 ET", now)
+        self.assertEqual(recent, datetime(2099, 1, 13, tzinfo=timezone.utc))  # 7-day safety net wins
+        self.assertEqual(lead_triage.pull_since("", now), datetime(2099, 1, 13, tzinfo=timezone.utc))
+
     def test_render_markdown_for_connector(self):
         b = lead_triage.lead_brief(lead_triage.find_lead("900000000000000002", leads_file=self.zoho))
         out = lead_triage.render(b, LEAD, "markdown")
         self.assertEqual(out["channel"], "C0CCE3370AD")
         self.assertTrue(out["main"].startswith("🟢 **Lead · 8/10** — **Example News Group**"))
         self.assertIn("```\nHi, we run 12 news sites", out["main"])
+        self.assertIn("🕒 Received: 2099-01-01 08:49 ET (Thu)", out["main"])
         self.assertIn(f"[Review & approve in Zoho]({approval_url('900000000000000002')}) · "
                       "Zoho lead ID: 900000000000000002", out["main"])
         self.assertEqual(lead_triage.posted_lead_ids_in_text(out["main"]), {"900000000000000002"})

@@ -81,11 +81,13 @@ class ZohoClient:
         return filter_web_form(self.recent_leads(), now)
 
 
-def filter_web_form(leads: list[dict], now: datetime | None = None) -> list[dict]:
-    """Leads from the configured web-form sources, created within the lookback window."""
+def filter_web_form(leads: list[dict], now: datetime | None = None,
+                    since: datetime | None = None) -> list[dict]:
+    """Leads from the configured web-form sources created at/after ``since``
+    (default: the lookback window). Never earlier than the go-live cutoff."""
     cfg = lead_triage_config()["zoho"]
     now = now or datetime.now(timezone.utc)
-    since = now - timedelta(days=cfg.get("lookback_days", 7))
+    since = since or now - timedelta(days=cfg.get("lookback_days", 7))
     if cfg.get("not_before"):
         since = max(since, datetime.fromisoformat(cfg["not_before"]))
     sources = set(cfg["lead_sources"])
@@ -100,3 +102,14 @@ def load_leads_file(path) -> list[dict]:
     while isinstance(data, dict):  # unwrap {"status":..,"data":{"data":[..]}} / {"data":[..]}
         data = data["data"]
     return data
+
+
+def load_leads_files(paths) -> list[dict]:
+    """Several saved getRecords pages, merged (first copy of each lead ID wins)."""
+    if isinstance(paths, (str, bytes)) or hasattr(paths, "read_text"):
+        paths = [paths]
+    seen: dict[str, dict] = {}
+    for path in paths:
+        for lead in load_leads_file(path):
+            seen.setdefault(lead["id"], lead)
+    return list(seen.values())

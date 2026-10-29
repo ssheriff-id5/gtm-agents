@@ -45,8 +45,8 @@ Website "Contact Us" leads go from Zoho into a Claude assessment, then a post in
 
 - SOP: [`.claude/skills/web-lead-triage/`](.claude/skills/web-lead-triage) (spam check, research, offering match, 1–10 score). The offerings reference is `offerings.md`.
 - Plumbing: `lib/zoho_client.py` (read-only), `lib/lead_triage.py`, config `config/lead_triage.yaml`.
-- **How it runs now:** an hourly Claude scheduled task (claude.ai) using the connected **Zoho CRM**, **Slack** and **Clay** connectors, like the other scheduled reports. No API keys needed. `lib.cli` only filters, dedupes, validates and formats (`leads-pending --zoho-json … --posted-text …`, `lead-render`).
-- The lead's message and the approve link are inserted by code straight from Zoho, never retyped by Claude. Each post carries `Zoho lead ID: <id>`, which is how later runs know it's done. Leads from before the go-live cutoff (`not_before` in the config) are never posted. If leads can't be posted, a ❌ note goes to `#webform` and they're retried next run.
+- **How it runs now:** a Claude scheduled task (claude.ai), twice a day around 8am and 2pm ET, using the connected **Zoho CRM**, **Slack** and **Clay** connectors, like the other scheduled reports. No API keys needed. `lib.cli` only filters, dedupes, validates and formats (`leads-since`, `leads-pending --zoho-json … --posted-text …`, `lead-render`).
+- The lead's message and the approve link are inserted by code straight from Zoho, never retyped by Claude. Each post shows when the lead came in (`🕒 Received: … ET`) and its `Zoho lead ID`. Each run pulls everything after the last lead posted, paging back through Zoho as needed, with a 7-day safety net for retries. Leads already posted are skipped by ID. Leads from before the go-live cutoff (`not_before` in the config) are never posted. If leads can't be posted, a ❌ note goes to `#webform` and they're retried next run.
 - Use Zoho `getRecords`, not COQL: COQL leaves out leads still waiting for approval.
 
 **Later (optional): headless GitHub Actions run** (`.github/workflows/web-lead-triage.yml`, cron off). It doesn't depend on anyone's claude.ai connectors, but it needs these secrets:

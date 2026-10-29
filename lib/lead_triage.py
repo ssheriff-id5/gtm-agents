@@ -20,8 +20,10 @@ from pathlib import Path
 
 from lib import config
 from lib.slack_client import SlackClient
+from zoneinfo import ZoneInfo
+
 from lib.zoho_client import (ZohoClient, approval_url, filter_web_form, lead_triage_config,
-                             load_leads_file)
+                             load_leads_files)
 
 VERDICTS = {"Lead": "🟢", "Not sure": "🟡", "Spam": "🔴"}
 FITS = ("High", "Partial", "None")
@@ -30,6 +32,10 @@ OFFERINGS = ("Identify", "Monetize", "Enrich", "Augment", "Activate", "Expand", 
 # A posted lead carries its Zoho link and a plain "Zoho lead ID: <id>" (the plain ID
 # survives however a reader renders links).
 LEAD_ID_RE = re.compile(r"(?:/tab/Leads/|Zoho lead ID:\W*)(\d{12,})")
+# Each post also shows when the lead came in. The newest one in #webform is the
+# "last lead pulled": the next run pulls everything submitted after it.
+RECEIVED_RE = re.compile(r"Received:\W*(\d{4}-\d{2}-\d{2} \d{2}:\d{2}) ET")
+ET = ZoneInfo("America/New_York")
 
 
 class AssessmentError(ValueError):
@@ -71,11 +77,34 @@ def posted_lead_ids_in_text(text: str) -> set[str]:
     return set(LEAD_ID_RE.findall(text))
 
 
-def pending_from_files(leads_file: str | Path, posted_text_file: str | Path) -> list[dict]:
-    """pending_leads() for connector runs: Zoho response and #webform history saved to files."""
-    done = posted_lead_ids_in_text(Path(posted_text_file).read_text(encoding="utf-8"))
-    leads = [lead for lead in filter_web_form(load_leads_file(leads_file)) if lead["id"] not in done]
-    return sorted(leads, key=lambda lead: lead["Created_Time"])
+def received_label(created_time: str) -> str:
+    """'2026-10-28 10:26 ET (Wed)': when the lead came in, in US Eastern time."""
+    t = datetime.fromisoformat(created_time).astimezone(ET)
+    return f"{t:%Y-%m-%d %H:%M} ET ({t:%a})"
+
+
+def last_received_in_text(text: str) -> datetime | None:
+    """Submission time of the newest lead already posted in #webform, if any post shows one."""
+    times = [datetime.strptime(m, "%Y-%m-%d %H:%M").replace(tzinfo=ET) for m in RECEIVED_RE.findall(text)]
+    return max(times) if times else None
+
+
+def pull_since(posted_text: str, now: datetime | None = None) -> datetime:
+    """How far back to pull from Zoho: from the last lead posted, and never less than the
+    lookback window, so a lead that failed to post is retried. (The go-live cutoff is
+    applied on top by filter_web_form.)"""
+    now = now or datetime.now(timezone.utc)
+    window = now - timedelta(days=lead_triage_config()["zoho"].get("lookback_days", 7))
+    last = last_received_in_text(posted_text)
+    return min(last, window) if last else window
+
+
+def pending_from_files(leads_files, posted_text_file: str | Path, now: datetime | None = None) -> list[dict]:
+    """pending_leads() for connector runs: Zoho pages and #webform history saved to files."""
+    posted = Path(posted_text_file).read_text(encoding="utf-8")
+    done = posted_lead_ids_in_text(posted)
+    leads = filter_web_form(load_leads_files(leads_files), now=now, since=pull_since(posted, now))
+    return sorted((lead for lead in leads if lead["id"] not in done), key=lambda lead: lead["Created_Time"])
 
 
 def pending_leads(zoho: ZohoClient | None = None, slack: SlackClient | None = None) -> list[dict]:
@@ -103,6 +132,7 @@ def lead_brief(lead: dict) -> dict:
         "lead_source": lead.get("Lead_Source"),
         "message": (lead.get("Description") or "").replace("\r\n", "\n").strip(),
         "created_time": lead.get("Created_Time"),
+        "received": received_label(lead["Created_Time"]),
         "approve_url": approval_url(lead["id"]),
     }
 
@@ -219,6 +249,7 @@ def main_post(brief: dict, a: dict, style: str = "mrkdwn") -> str:
     lines = [
         head,
         f"{_who(brief, st)} · {types}",
+        f"🕒 Received: {brief['received']}",
         f"{st.bold('Our take:')} {a['take'].strip()}",
         st.bold("What they wrote:"),
         st.submission(brief["message"]),
@@ -292,7 +323,7 @@ def post_failure(detail: str, run_url: str | None = None, slack: SlackClient | N
 
 
 def find_lead(lead_id: str, zoho: ZohoClient | None = None, leads_file: str | Path | None = None) -> dict:
-    leads = load_leads_file(leads_file) if leads_file else (zoho or ZohoClient()).web_form_leads()
+    leads = load_leads_files(leads_file) if leads_file else (zoho or ZohoClient()).web_form_leads()
     for lead in leads:
         if lead["id"] == lead_id:
             return lead

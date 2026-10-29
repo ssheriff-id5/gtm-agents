@@ -9,7 +9,8 @@
         --question "..." --context "..." --due 2026-10-15
     python -m lib.cli smoke-test --employee rick
     python -m lib.cli leads-pending [--ids-file out/leads/pending.txt] [--json-file out/leads/pending.json]
-    python -m lib.cli leads-pending --zoho-json out/leads/zoho.json --posted-text out/leads/webform.txt
+    python -m lib.cli leads-since --posted-text out/leads/webform.txt
+    python -m lib.cli leads-pending --zoho-json out/leads/zoho-1.json [...] --posted-text out/leads/webform.txt
     python -m lib.cli lead-post --assessment out/leads/<lead_id>.json
     python -m lib.cli lead-render --assessment out/leads/<lead_id>.json --zoho-json out/leads/zoho.json
     python -m lib.cli leads-verify --ids-file out/leads/pending.txt
@@ -119,6 +120,15 @@ def cmd_lead_post(args) -> int:
     return 0 if report.ok else 1
 
 
+def cmd_leads_since(args) -> int:
+    """How far back this run must pull from Zoho (ISO time), from the last lead posted in #webform."""
+    posted = Path(args.posted_text).read_text(encoding="utf-8")
+    last = lead_triage.last_received_in_text(posted)
+    print(json.dumps({"pull_since": lead_triage.pull_since(posted).isoformat(timespec="seconds"),
+                      "last_lead_posted": last.isoformat() if last else None}))
+    return 0
+
+
 def cmd_lead_render(args) -> int:
     """Format a lead's #webform post (for sending through the Slack connector)."""
     try:
@@ -191,7 +201,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("leads-pending", help="Web-form leads not yet posted to #webform (JSON)")
     p.add_argument("--ids-file", help="Also write the pending lead IDs here, one per line")
     p.add_argument("--json-file", help="Also write the briefs JSON here")
-    p.add_argument("--zoho-json", help="Connector mode: Zoho Leads response saved to a file")
+    p.add_argument("--zoho-json", nargs="+", help="Connector mode: Zoho Leads response(s) saved to file(s)")
     p.add_argument("--posted-text", help="Connector mode: recent #webform history saved to a file")
     p.set_defaults(fn=cmd_leads_pending, banner=False)  # banner only when it calls the APIs
 
@@ -199,9 +209,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--assessment", required=True, help="Path to the assessment JSON")
     p.set_defaults(fn=cmd_lead_post)
 
+    p = sub.add_parser("leads-since", help="From #webform history: how far back to pull leads from Zoho")
+    p.add_argument("--posted-text", required=True)
+    p.set_defaults(fn=cmd_leads_since, banner=False)
+
     p = sub.add_parser("lead-render", help="Validate an assessment and print the #webform post text")
     p.add_argument("--assessment", required=True)
-    p.add_argument("--zoho-json", required=True, help="The same Zoho Leads file used for leads-pending")
+    p.add_argument("--zoho-json", nargs="+", required=True, help="The same Zoho Leads file(s) used for leads-pending")
     p.add_argument("--style", choices=("markdown", "mrkdwn"), default="markdown")
     p.set_defaults(fn=cmd_lead_render, banner=False)  # sends nothing, in any mode
 
