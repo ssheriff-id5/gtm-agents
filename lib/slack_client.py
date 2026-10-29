@@ -37,9 +37,10 @@ class SlackError(RuntimeError):
 
 
 class SlackClient:
-    def __init__(self, dry_run: bool | None = None, token: str | None = None):
+    def __init__(self, dry_run: bool | None = None, token: str | None = None,
+                 token_env: str = "SLACK_BOT_TOKEN"):
         self.dry_run = config.is_dry_run() if dry_run is None else dry_run
-        self.token = None if self.dry_run else (token or config.require_env("SLACK_BOT_TOKEN"))
+        self.token = None if self.dry_run else (token or config.require_env(token_env))
         self.session = requests.Session()
 
     # -- plumbing --
@@ -90,6 +91,30 @@ class SlackClient:
         data = self._call("chat.postMessage", payload)
         return {"channel": data["channel"], "ts": data["ts"],
                 "permalink": self.permalink(data["channel"], data["ts"]) if with_permalink else None}
+
+    def post(self, channel: str, text: str, thread_ts: str | None = None,
+             with_permalink: bool = True) -> dict:
+        """Post as the token's owner (no custom name/avatar). With a user token, that's the human."""
+        payload = {"channel": channel, "text": text, "unfurl_links": False, "unfurl_media": False}
+        if thread_ts:
+            payload["thread_ts"] = thread_ts
+        data = self._call("chat.postMessage", payload)
+        return {"channel": data["channel"], "ts": data["ts"],
+                "permalink": self.permalink(data["channel"], data["ts"]) if with_permalink else None}
+
+    def channel_history(self, channel: str, oldest_ts: str) -> list[dict]:
+        """All top-level messages in ``channel`` after ``oldest_ts`` (follows pagination)."""
+        out: list[dict] = []
+        cursor = None
+        while True:
+            params = {"channel": channel, "oldest": oldest_ts, "limit": 200}
+            if cursor:
+                params["cursor"] = cursor
+            data = self._call("conversations.history", params, http="GET")
+            out += data.get("messages", [])
+            cursor = (data.get("response_metadata") or {}).get("next_cursor")
+            if not cursor:
+                return out
 
     def permalink(self, channel: str, ts: str) -> str:
         return self._call("chat.getPermalink", {"channel": channel, "message_ts": ts}, http="GET")["permalink"]

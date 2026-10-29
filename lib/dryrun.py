@@ -67,7 +67,7 @@ def render_preview() -> str:
         if e["service"] == "Slack" and e["endpoint"] == "chat.postMessage":
             p = e["payload"]
             where = "  ↳ thread reply" if p.get("thread_ts") else f"{p['channel']}"
-            out.append(f"Slack {where} — posted as \"{p.get('username')}\" {p.get('icon_emoji') or ''}")
+            out.append(f"Slack {where} — posted as \"{p.get('username') or 'token owner'}\" {p.get('icon_emoji') or ''}")
             out += [f"  {line}" for line in p["text"].splitlines()]
             out.append("")
     return "\n".join(out).rstrip()

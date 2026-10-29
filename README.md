@@ -7,8 +7,8 @@ A small team of AI employees that do recurring RevOps work. Each one logs every 
 | Handbook (read by every agent) | [`CLAUDE.md`](CLAUDE.md) |
 | Full design / handoff | [`REVOPS_AI_TEAM_HANDOFF.md`](REVOPS_AI_TEAM_HANDOFF.md) |
 | Employees | [`.claude/agents/`](.claude/agents): Abby (manager), Rick, Stevey |
-| SOPs | [`.claude/skills/`](.claude/skills): `job-contract`, `manager-review` (draft), `pipeline-tracker` (not yet ported) |
-| Plumbing | [`lib/`](lib): Notion, Slack, Sheets clients + `lib.cli` |
+| SOPs | [`.claude/skills/`](.claude/skills): `job-contract`, `manager-review` (draft), `pipeline-tracker` (not yet ported), `web-lead-triage` |
+| Plumbing | [`lib/`](lib): Notion, Slack, Sheets, Zoho clients + `lib.cli` |
 | IDs and identities | [`config/`](config) |
 
 **Build status:** Phase 1 (helpers and job contract) is done in dry-run. Next comes Phase 0's credentials, then Phase 2 (port the Pipeline Tracker to Rick).
@@ -38,6 +38,23 @@ Everything is **dry-run by default**. Each command prints the exact Notion/Slack
 5. **Test it:** Actions → *Rick · Pipeline Tracker* → Run workflow → `mode: live`. You should get a Work Log row and a post from "Rick" in the channel. That's Phase 1's "done when".
 
 Locally: `REVOPS_MODE=live NOTION_TOKEN=… SLACK_BOT_TOKEN=… SLACK_CHANNEL_ID=… python -m lib.cli smoke-test --employee rick`.
+
+## Web lead triage (#webform)
+
+Website "Contact Us" leads go from Zoho into a Claude assessment, then a post in `#webform` **from Satiesh's Slack account**. The team reviews the post there. Satiesh then approves the lead in Zoho and assigns it. This isn't an AI-employee task: there's no persona and no Work Log row. The Slack post is the record, and it's also how the pipeline knows which leads are already done.
+
+- SOP: [`.claude/skills/web-lead-triage/`](.claude/skills/web-lead-triage) (spam check, research, offering match, 1–10 score). The offerings reference is `offerings.md`.
+- Plumbing: `lib/zoho_client.py` (read-only), `lib/lead_triage.py`, config `config/lead_triage.yaml`.
+- Schedule: `.github/workflows/web-lead-triage.yml`. It checks every 30 min (cron commented out until the first live run). Claude only runs when there are new leads.
+- The lead's message and the approve link are inserted by code straight from Zoho, never retyped by Claude. If any step fails, a ❌ notice is posted in `#webform` and the leads are retried on the next run.
+
+**Setup (one-off):**
+1. **Zoho:** go to [api-console.zoho.eu](https://api-console.zoho.eu) → Self Client, scope `ZohoCRM.modules.leads.READ`, and exchange the code for a refresh token. Ideally do this as a Zoho integration user, not a person. Add the secrets `ZOHO_CLIENT_ID`, `ZOHO_CLIENT_SECRET` and `ZOHO_REFRESH_TOKEN`.
+2. **Slack:** in a Slack app, add the **user** token scopes `chat:write` and `channels:history`, then install it as Satiesh. Add the `xoxp-…` token as the secret `SLACK_USER_TOKEN`.
+3. Add the secret `ANTHROPIC_API_KEY`.
+4. Go to Actions → *Web lead triage* → Run workflow: first `dry-run` (fixture leads), then `live`. Then uncomment the cron.
+
+Try it locally: `python -m lib.cli leads-pending` (prints fixture leads in dry-run).
 
 ## Adding a new employee
 

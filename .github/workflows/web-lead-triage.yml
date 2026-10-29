@@ -1,0 +1,62 @@
+name: Web lead triage
+
+# Every 30 min: find new website "Contact Us" leads in Zoho, have Claude spam-check,
+# research and score each, and post them to #webform from Satiesh's Slack account.
+# Claude only runs when there are new leads, so quiet runs cost nothing.
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "dry-run (fixture leads, prints posts) or live (real Zoho + Slack)"
+        type: choice
+        options: [dry-run, live]
+        default: dry-run
+  # schedule:
+  #   - cron: "*/30 * * * *"   # enable after the first successful live run
+
+concurrency: web-lead-triage   # never two runs posting the same lead
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      REVOPS_MODE: ${{ inputs.mode || 'live' }}
+      ZOHO_CLIENT_ID: ${{ secrets.ZOHO_CLIENT_ID }}
+      ZOHO_CLIENT_SECRET: ${{ secrets.ZOHO_CLIENT_SECRET }}
+      ZOHO_REFRESH_TOKEN: ${{ secrets.ZOHO_REFRESH_TOKEN }}
+      SLACK_USER_TOKEN: ${{ secrets.SLACK_USER_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+
+      - name: Find new web-form leads
+        id: pending
+        run: |
+          python -m lib.cli --quiet leads-pending \
+            --ids-file out/leads/pending.txt --json-file out/leads/pending.json > /dev/null
+          echo "count=$(grep -c . out/leads/pending.txt || true)" >> "$GITHUB_OUTPUT"
+          cat out/leads/pending.txt
+
+      - name: Claude researches, scores and posts each lead
+        if: steps.pending.outputs.count != '0'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          npm install -g @anthropic-ai/claude-code
+          claude -p "Run the web-lead-triage skill for every lead in out/leads/pending.json." \
+            --allowedTools "Skill,Read,Write,Glob,Grep,WebSearch,WebFetch,Bash(python -m lib.cli lead-post:*)"
+
+      - name: Check every lead was posted
+        if: steps.pending.outputs.count != '0'
+        run: python -m lib.cli leads-verify --ids-file out/leads/pending.txt
+
+      - name: Report failure in #webform
+        if: failure()
+        run: |
+          python -m lib.cli lead-triage-failed \
+            --detail "Step failed in the scheduled run; unposted leads will be retried next run." \
+            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

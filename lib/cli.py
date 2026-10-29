@@ -8,6 +8,10 @@
     python -m lib.cli input-request --employee rick --ask satiesh --task "Pipeline Tracker" \
         --question "..." --context "..." --due 2026-10-15
     python -m lib.cli smoke-test --employee rick
+    python -m lib.cli leads-pending [--ids-file out/leads/pending.txt] [--json-file out/leads/pending.json]
+    python -m lib.cli lead-post --assessment out/leads/<lead_id>.json
+    python -m lib.cli leads-verify --ids-file out/leads/pending.txt
+    python -m lib.cli lead-triage-failed --detail "..." [--run-url URL]
 
 Dry-run by default; set REVOPS_MODE=live to hit real APIs. Exit code is non-zero
 if any step of the contract failed, so a CI run turns red instead of hiding it.
@@ -18,8 +22,9 @@ import argparse
 import json
 import sys
 from datetime import date
+from pathlib import Path
 
-from lib import config, dryrun
+from lib import config, dryrun, lead_triage
 from lib.job_contract import RunReport, finish_run, raise_input_request
 from lib.notion_client import NotionClient, WORK_LOG_RESULTS
 
@@ -76,6 +81,57 @@ def cmd_smoke_test(args) -> int:
         output_link=None))
 
 
+def cmd_leads_pending(args) -> int:
+    """Web-form leads not yet posted to #webform, as briefs for Claude to research."""
+    briefs = [lead_triage.lead_brief(lead) for lead in lead_triage.pending_leads()]
+    print(json.dumps(briefs, indent=2, ensure_ascii=False))
+    if args.ids_file:
+        Path(args.ids_file).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.ids_file).write_text("".join(f"{b['lead_id']}\n" for b in briefs), encoding="utf-8")
+    if args.json_file:
+        Path(args.json_file).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.json_file).write_text(json.dumps(briefs, indent=2, ensure_ascii=False), encoding="utf-8")
+    print(f"{len(briefs)} pending lead(s)", file=sys.stderr)
+    return 0
+
+
+def cmd_lead_post(args) -> int:
+    try:
+        assessment = lead_triage.load_assessment(args.assessment)
+    except lead_triage.AssessmentError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+    brief = lead_triage.lead_brief(lead_triage.find_lead(assessment["lead_id"]))
+    report = lead_triage.post_assessment(brief, assessment)
+    if config.is_dry_run():
+        print("\n== Preview (what #webform would see) ==\n" + dryrun.render_preview())
+    print(json.dumps(report.__dict__, indent=2))
+    for err in report.errors:
+        print(f"ERROR: {err}", file=sys.stderr)
+    return 0 if report.ok else 1
+
+
+def cmd_leads_verify(args) -> int:
+    """Fail if any lead from the pending list didn't make it to #webform (no silent skips)."""
+    wanted = [line.strip() for line in Path(args.ids_file).read_text().splitlines() if line.strip()]
+    if config.is_dry_run():
+        print(f"Dry run: skipping verification of {len(wanted)} lead(s) (nothing was really posted)")
+        return 0
+    missing = sorted(set(wanted) - lead_triage.posted_lead_ids(lead_triage.slack_client()))
+    if missing:
+        print(f"ERROR: {len(missing)} lead(s) were not posted: {', '.join(missing)}", file=sys.stderr)
+        return 1
+    print(f"All {len(wanted)} lead(s) posted")
+    return 0
+
+
+def cmd_lead_triage_failed(args) -> int:
+    lead_triage.post_failure(args.detail, args.run_url)
+    if config.is_dry_run():
+        print("\n== Preview ==\n" + dryrun.render_preview())
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="python -m lib.cli", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -111,6 +167,24 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("smoke-test", help="Phase 1 dummy run")
     p.add_argument("--employee", required=True)
     p.set_defaults(fn=cmd_smoke_test)
+
+    p = sub.add_parser("leads-pending", help="Web-form leads not yet posted to #webform (JSON)")
+    p.add_argument("--ids-file", help="Also write the pending lead IDs here, one per line")
+    p.add_argument("--json-file", help="Also write the briefs JSON here")
+    p.set_defaults(fn=cmd_leads_pending)
+
+    p = sub.add_parser("lead-post", help="Validate a lead assessment and post it to #webform")
+    p.add_argument("--assessment", required=True, help="Path to the assessment JSON")
+    p.set_defaults(fn=cmd_lead_post)
+
+    p = sub.add_parser("leads-verify", help="Fail if any of the given leads isn't in #webform")
+    p.add_argument("--ids-file", required=True)
+    p.set_defaults(fn=cmd_leads_verify)
+
+    p = sub.add_parser("lead-triage-failed", help="Post a failure notice to #webform")
+    p.add_argument("--detail", required=True)
+    p.add_argument("--run-url")
+    p.set_defaults(fn=cmd_lead_triage_failed)
     return ap
 
 

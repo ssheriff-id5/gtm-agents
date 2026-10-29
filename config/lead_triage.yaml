@@ -1,0 +1,22 @@
+# Web lead triage: website "Contact Us" leads → research → scored post in #webform.
+#
+# Not an AI-employee task: posts come from Satiesh's own Slack account (SLACK_USER_TOKEN),
+# so the team reviews them as his. Satiesh approves and assigns in Zoho himself; this
+# pipeline only READS Zoho.
+
+zoho:
+  accounts_url: https://accounts.zoho.eu        # EU data centre (notifications@zohocrm.eu)
+  api_url: https://www.zohoapis.eu/crm/v8
+  web_url: https://crm.zoho.eu
+  org_domain: org20065454766                    # from Zoho → getOrganization.domain_name
+  lead_sources:                                 # Lead_Source values that count as web-form leads
+    - "Web Form - Contact Us"
+  lookback_days: 7                              # only leads created in this window are considered
+
+slack:
+  channel: C0CCE3370AD                          # #webform
+  channel_name: "#webform"
+  token_env: SLACK_USER_TOKEN                   # xoxp- user token → posts appear as Satiesh
+
+# Assessments Claude writes go here (one JSON file per lead), then lib.cli posts them.
+assessment_dir: out/leads
