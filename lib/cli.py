@@ -9,7 +9,9 @@
         --question "..." --context "..." --due 2026-10-15
     python -m lib.cli smoke-test --employee rick
     python -m lib.cli leads-pending [--ids-file out/leads/pending.txt] [--json-file out/leads/pending.json]
+    python -m lib.cli leads-pending --zoho-json out/leads/zoho.json --posted-text out/leads/webform.txt
     python -m lib.cli lead-post --assessment out/leads/<lead_id>.json
+    python -m lib.cli lead-render --assessment out/leads/<lead_id>.json --zoho-json out/leads/zoho.json
     python -m lib.cli leads-verify --ids-file out/leads/pending.txt
     python -m lib.cli lead-triage-failed --detail "..." [--run-url URL]
 
@@ -31,7 +33,7 @@ from lib.notion_client import NotionClient, WORK_LOG_RESULTS
 
 def _banner() -> None:
     mode = "DRY RUN — nothing is sent" if config.is_dry_run() else "LIVE"
-    print(f"== RevOps AI Team · mode: {mode} ==")
+    print(f"== RevOps AI Team · mode: {mode} ==", file=sys.stderr)
 
 
 def _print_report(report: RunReport) -> int:
@@ -83,7 +85,11 @@ def cmd_smoke_test(args) -> int:
 
 def cmd_leads_pending(args) -> int:
     """Web-form leads not yet posted to #webform, as briefs for Claude to research."""
-    briefs = [lead_triage.lead_brief(lead) for lead in lead_triage.pending_leads()]
+    if bool(args.zoho_json) != bool(args.posted_text):
+        raise config.ConfigError("--zoho-json and --posted-text go together")
+    leads = (lead_triage.pending_from_files(args.zoho_json, args.posted_text) if args.zoho_json
+             else lead_triage.pending_leads())
+    briefs = [lead_triage.lead_brief(lead) for lead in leads]
     print(json.dumps(briefs, indent=2, ensure_ascii=False))
     if args.ids_file:
         Path(args.ids_file).parent.mkdir(parents=True, exist_ok=True)
@@ -109,6 +115,18 @@ def cmd_lead_post(args) -> int:
     for err in report.errors:
         print(f"ERROR: {err}", file=sys.stderr)
     return 0 if report.ok else 1
+
+
+def cmd_lead_render(args) -> int:
+    """Format a lead's #webform post (for sending through the Slack connector)."""
+    try:
+        assessment = lead_triage.load_assessment(args.assessment)
+        brief = lead_triage.lead_brief(lead_triage.find_lead(assessment["lead_id"], leads_file=args.zoho_json))
+        print(json.dumps(lead_triage.render(brief, assessment, args.style), indent=2, ensure_ascii=False))
+    except lead_triage.AssessmentError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+    return 0
 
 
 def cmd_leads_verify(args) -> int:
@@ -171,11 +189,19 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("leads-pending", help="Web-form leads not yet posted to #webform (JSON)")
     p.add_argument("--ids-file", help="Also write the pending lead IDs here, one per line")
     p.add_argument("--json-file", help="Also write the briefs JSON here")
+    p.add_argument("--zoho-json", help="Connector mode: Zoho Leads response saved to a file")
+    p.add_argument("--posted-text", help="Connector mode: recent #webform history saved to a file")
     p.set_defaults(fn=cmd_leads_pending)
 
     p = sub.add_parser("lead-post", help="Validate a lead assessment and post it to #webform")
     p.add_argument("--assessment", required=True, help="Path to the assessment JSON")
     p.set_defaults(fn=cmd_lead_post)
+
+    p = sub.add_parser("lead-render", help="Validate an assessment and print the #webform post text")
+    p.add_argument("--assessment", required=True)
+    p.add_argument("--zoho-json", required=True, help="The same Zoho Leads file used for leads-pending")
+    p.add_argument("--style", choices=("markdown", "mrkdwn"), default="markdown")
+    p.set_defaults(fn=cmd_lead_render)
 
     p = sub.add_parser("leads-verify", help="Fail if any of the given leads isn't in #webform")
     p.add_argument("--ids-file", required=True)

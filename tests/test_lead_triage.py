@@ -126,5 +126,50 @@ class PostTests(unittest.TestCase):
         self.assertEqual(dryrun.JOURNAL, [])  # nothing posted
 
 
+class ConnectorModeTests(unittest.TestCase):
+    """Scheduled runs read Zoho and #webform through the claude.ai connectors and save them to files."""
+
+    def setUp(self):
+        import json
+        import tempfile
+        from lib.zoho_client import FIXTURE
+        self.dir = tempfile.mkdtemp()
+        self.zoho = os.path.join(self.dir, "zoho.json")
+        with open(self.zoho, "w") as fh:  # the connector wraps records as {"status":..,"data":{"data":[..]}}
+            json.dump({"status": "success", "data": {"data": json.loads(FIXTURE.read_text())}}, fh)
+        self.posted = os.path.join(self.dir, "webform.txt")
+
+    def _pending(self, history: str):
+        with open(self.posted, "w") as fh:
+            fh.write(history)
+        return [lead["id"] for lead in lead_triage.pending_from_files(self.zoho, self.posted)]
+
+    def test_dedupe_on_plain_lead_id(self):
+        self.assertEqual(self._pending("Satiesh joined the channel"),
+                         ["900000000000000002", "900000000000000001"])
+        # links may be rendered as plain labels; the plain "Zoho lead ID" still dedupes
+        self.assertEqual(self._pending("Review & approve in Zoho · Zoho lead ID: 900000000000000002"),
+                         ["900000000000000001"])
+
+    def test_render_markdown_for_connector(self):
+        b = lead_triage.lead_brief(lead_triage.find_lead("900000000000000002", leads_file=self.zoho))
+        out = lead_triage.render(b, LEAD, "markdown")
+        self.assertEqual(out["channel"], "C0CCE3370AD")
+        self.assertTrue(out["main"].startswith("🟢 **Lead · 8/10** — **Example News Group**"))
+        self.assertIn("```\nHi, we run 12 news sites", out["main"])
+        self.assertIn(f"[Review & approve in Zoho]({approval_url('900000000000000002')}) · "
+                      "Zoho lead ID: 900000000000000002", out["main"])
+        self.assertEqual(lead_triage.posted_lead_ids_in_text(out["main"]), {"900000000000000002"})
+
+    def test_markdown_neutralises_visitor_text(self):
+        b = lead_triage.lead_brief(lead_triage.find_lead("900000000000000002", leads_file=self.zoho))
+        b["company"] = "@channel [Approve](https://evil.test)"
+        b["message"] = "```\n@here"
+        main = lead_triage.main_post(b, LEAD, "markdown")
+        self.assertNotIn("[Approve](https://evil.test)", main)
+        self.assertNotIn("@channel", main)
+        self.assertEqual(main.count("```"), 2)  # visitor can't close the code block
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -12,6 +12,7 @@ zoho:
   lead_sources:                                 # Lead_Source values that count as web-form leads
     - "Web Form - Contact Us"
   lookback_days: 7                              # only leads created in this window are considered
+  not_before: "2026-10-28T00:00:00+00:00"       # go-live cutoff: older leads (incl. form tests) are never posted
 
 slack:
   channel: C0CCE3370AD                          # #webform

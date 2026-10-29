@@ -7,7 +7,7 @@ owns the *facts and format*. In particular the lead's own submission and the
 approve link are taken from Zoho here, never from Claude's text, so the reviewer
 always sees exactly what the person typed.
 
-Dedupe: a lead counts as handled once a #webform message contains its Zoho link.
+Dedupe: a lead counts as handled once a #webform message contains its Zoho lead ID.
 Slack is the record, so there is no extra state store to keep in sync.
 """
 from __future__ import annotations
@@ -20,13 +20,16 @@ from pathlib import Path
 
 from lib import config
 from lib.slack_client import SlackClient
-from lib.zoho_client import ZohoClient, approval_url, lead_triage_config
+from lib.zoho_client import (ZohoClient, approval_url, filter_web_form, lead_triage_config,
+                             load_leads_file)
 
 VERDICTS = {"Lead": "🟢", "Not sure": "🟡", "Spam": "🔴"}
 FITS = ("High", "Partial", "None")
 LINKEDIN_CONFIDENCE = ("Confirmed", "Likely", "Not found")
 OFFERINGS = ("Identify", "Monetize", "Enrich", "Augment", "Activate", "Expand", "Sync", "Optimize")
-LEAD_LINK_RE = re.compile(r"/tab/Leads/(\d+)")
+# A posted lead carries its Zoho link and a plain "Zoho lead ID: <id>" (the plain ID
+# survives however a reader renders links).
+LEAD_ID_RE = re.compile(r"(?:/tab/Leads/|Zoho lead ID:\W*)(\d{12,})")
 
 
 class AssessmentError(ValueError):
@@ -59,8 +62,20 @@ def posted_lead_ids(slack: SlackClient, now: datetime | None = None) -> set[str]
     oldest = f"{(now - timedelta(days=days)).timestamp():.6f}"
     ids: set[str] = set()
     for msg in slack.channel_history(_slack_cfg()["channel"], oldest):
-        ids.update(LEAD_LINK_RE.findall(msg.get("text", "")))
+        ids.update(LEAD_ID_RE.findall(msg.get("text", "")))
     return ids
+
+
+def posted_lead_ids_in_text(text: str) -> set[str]:
+    """Same, from #webform history saved as text (e.g. the Slack connector's read_channel output)."""
+    return set(LEAD_ID_RE.findall(text))
+
+
+def pending_from_files(leads_file: str | Path, posted_text_file: str | Path) -> list[dict]:
+    """pending_leads() for connector runs: Zoho response and #webform history saved to files."""
+    done = posted_lead_ids_in_text(Path(posted_text_file).read_text(encoding="utf-8"))
+    leads = [lead for lead in filter_web_form(load_leads_file(leads_file)) if lead["id"] not in done]
+    return sorted(leads, key=lambda lead: lead["Created_Time"])
 
 
 def pending_leads(zoho: ZohoClient | None = None, slack: SlackClient | None = None) -> list[dict]:
@@ -150,63 +165,100 @@ def load_assessment(path: str | Path) -> dict:
 
 
 # -- formatting ---------------------------------------------------------------
+#
+# Two output styles, same content:
+#   "mrkdwn"   — Slack's own markup, for posting through the Slack API (lib.slack_client)
+#   "markdown" — standard markdown, for posting through the claude.ai Slack connector,
+#                which converts markdown itself
 
-def _esc(text: str | None) -> str:
-    """Slack-escape text a website visitor typed, so it can't @channel or fake a link."""
-    return (text or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+@dataclass(frozen=True)
+class _Style:
+    name: str
+
+    def bold(self, s: str) -> str:
+        return f"*{s}*" if self.name == "mrkdwn" else f"**{s}**"
+
+    def italic(self, s: str) -> str:
+        return f"_{s}_"
+
+    def link(self, url: str, label: str) -> str:
+        return f"<{url}|{label}>" if self.name == "mrkdwn" else f"[{label}]({url})"
+
+    def esc(self, text: str | None) -> str:
+        """Neutralise text a website visitor typed, so it can't @channel or fake a link."""
+        text = text or ""
+        if self.name == "mrkdwn":
+            return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        text = text.replace("<", "‹").replace(">", "›").replace("[", "⁅").replace("]", "⁆")
+        return re.sub(r"@(channel|here|everyone)\b", "@​\\1", text)
+
+    def submission(self, text: str) -> str:
+        """The lead's message, verbatim: a quote (mrkdwn) or a code block (markdown, renders nothing)."""
+        if self.name == "mrkdwn":
+            return "\n".join(f">{line}" if line else ">" for line in self.esc(text).splitlines()) or ">(empty)"
+        return "```\n" + (text or "(empty)").replace("```", "ʼʼʼ") + "\n```"
 
 
-def _quote(text: str) -> str:
-    return "\n".join(f">{line}" if line else ">" for line in _esc(text).splitlines()) or ">(empty)"
+STYLES = {"mrkdwn": _Style("mrkdwn"), "markdown": _Style("markdown")}
 
 
-def _who(brief: dict) -> str:
+def _who(brief: dict, st: _Style) -> str:
     name = " ".join(p for p in (brief["first_name"], brief["last_name"]) if p) or "(no name)"
-    return _esc(f"{name} · {brief['email'] or 'no email'}")
+    return st.esc(f"{name} · {brief['email'] or 'no email'}")
 
 
-def main_post(brief: dict, a: dict) -> str:
+def main_post(brief: dict, a: dict, style: str = "mrkdwn") -> str:
     """Channel message: verdict + score headline, our one-line take, the submission, the approve link."""
-    where = _esc(", ".join(p for p in (brief["city"], brief["country"]) if p))
-    types = _esc(", ".join(brief["company_types"])) or "no company type"
-    company = _esc(brief["company"]) or "(no company)"
-    head = f"{VERDICTS[a['verdict']]} *{a['verdict']} · {a['score']}/10* — *{company}*"
+    st = STYLES[style]
+    where = st.esc(", ".join(p for p in (brief["city"], brief["country"]) if p))
+    types = st.esc(", ".join(brief["company_types"])) or "no company type"
+    company = st.esc(brief["company"]) or "(no company)"
+    verdict = f"{a['verdict']} · {a['score']}/10"
+    head = f"{VERDICTS[a['verdict']]} {st.bold(verdict)} — {st.bold(company)}"
     head += f" ({where})" if where else ""
     lines = [
         head,
-        f"{_who(brief)} · {types}",
-        f"*Our take:* {a['take'].strip()}",
-        "*What they wrote:*",
-        _quote(brief["message"]),
-        f"<{brief['approve_url']}|Review & approve in Zoho>",
+        f"{_who(brief, st)} · {types}",
+        f"{st.bold('Our take:')} {a['take'].strip()}",
+        st.bold("What they wrote:"),
+        st.submission(brief["message"]),
+        f"{st.link(brief['approve_url'], 'Review & approve in Zoho')} · Zoho lead ID: {brief['lead_id']}",
     ]
     return "\n".join(lines)
 
 
-def thread_post(brief: dict, a: dict) -> str:
+def thread_post(brief: dict, a: dict, style: str = "mrkdwn") -> str:
     """Thread reply: the research behind the score."""
-    out = ["*Why this verdict*"] + [f"• {r}" for r in a["verdict_reasons"]]
+    st = STYLES[style]
+    out = [st.bold("Why this verdict")] + [f"• {r}" for r in a["verdict_reasons"]]
     if a["verdict"] != "Spam":
         c, co = a["contact"], a["company"]
-        li = c.get("linkedin_url")
         li_text = "LinkedIn not found" if c["linkedin_confidence"] == "Not found" else \
-            f"<{li}|LinkedIn> ({c['linkedin_confidence'].lower()} match)"
-        out += ["", "*Contact*", f"• {li_text}"]
+            f"{st.link(c['linkedin_url'], 'LinkedIn')} ({c['linkedin_confidence'].lower()} match)"
+        out += ["", st.bold("Contact"), f"• {li_text}"]
         for label, key in (("Role", "role"), ("Time in role", "tenure"), ("Responsibilities", "responsibilities")):
             out.append(f"• {label}: {c.get(key) or 'not found'}")
-        out += ["", "*Company*", f"• {co['what_they_do']}"]
+        out += ["", st.bold("Company"), f"• {co['what_they_do']}"]
         for label, key in (("Website", "website"), ("Size", "size"), ("Type", "type")):
             if co.get(key):
                 out.append(f"• {label}: {co[key]}")
-        out += ["", "*What they need*", a["needs"],
-                "", f"*Fit with ID5: {a['fit']}*" + (f" — {', '.join(a['offerings'])}" if a["offerings"] else ""),
-                a["fit_rationale"],
-                "", f"*Score {a['score']}/10*", a["score_rationale"]]
+        fit = st.bold(f"Fit with ID5: {a['fit']}") + (f" — {', '.join(a['offerings'])}" if a["offerings"] else "")
+        out += ["", st.bold("What they need"), a["needs"],
+                "", fit, a["fit_rationale"],
+                "", st.bold(f"Score {a['score']}/10"), a["score_rationale"]]
     sources = a.get("sources") or []
     if sources:
-        out += ["", "*Sources:* " + " · ".join(f"<{u}|{i}>" for i, u in enumerate(sources, 1))]
-    out += ["", "_Research and scores are Claude's assessment. The submission above is verbatim from Zoho._"]
+        out += ["", st.bold("Sources:") + " " + " · ".join(st.link(u, str(i)) for i, u in enumerate(sources, 1))]
+    out += ["", st.italic("Research and scores are Claude's assessment. The submission above is verbatim from Zoho.")]
     return "\n".join(out)
+
+
+def render(brief: dict, a: dict, style: str = "markdown") -> dict:
+    """Both messages, for posting through the Slack connector."""
+    if a["lead_id"] != brief["lead_id"]:
+        raise AssessmentError(f"assessment is for lead {a['lead_id']}, not {brief['lead_id']}")
+    return {"channel": _slack_cfg()["channel"], "lead_id": brief["lead_id"],
+            "main": main_post(brief, a, style), "thread": thread_post(brief, a, style)}
 
 
 def post_assessment(brief: dict, a: dict, slack: SlackClient | None = None) -> PostReport:
@@ -239,8 +291,9 @@ def post_failure(detail: str, run_url: str | None = None, slack: SlackClient | N
     slack.post(_slack_cfg()["channel"], text, with_permalink=False)
 
 
-def find_lead(lead_id: str, zoho: ZohoClient | None = None) -> dict:
-    for lead in (zoho or ZohoClient()).web_form_leads():
+def find_lead(lead_id: str, zoho: ZohoClient | None = None, leads_file: str | Path | None = None) -> dict:
+    leads = load_leads_file(leads_file) if leads_file else (zoho or ZohoClient()).web_form_leads()
+    for lead in leads:
         if lead["id"] == lead_id:
             return lead
     raise config.ConfigError(f"Lead {lead_id} is not a recent web-form lead in Zoho")

@@ -45,14 +45,14 @@ Website "Contact Us" leads go from Zoho into a Claude assessment, then a post in
 
 - SOP: [`.claude/skills/web-lead-triage/`](.claude/skills/web-lead-triage) (spam check, research, offering match, 1–10 score). The offerings reference is `offerings.md`.
 - Plumbing: `lib/zoho_client.py` (read-only), `lib/lead_triage.py`, config `config/lead_triage.yaml`.
-- Schedule: `.github/workflows/web-lead-triage.yml`. It checks every 30 min (cron commented out until the first live run). Claude only runs when there are new leads.
-- The lead's message and the approve link are inserted by code straight from Zoho, never retyped by Claude. If any step fails, a ❌ notice is posted in `#webform` and the leads are retried on the next run.
+- **How it runs now:** an hourly Claude scheduled task (claude.ai) using the connected **Zoho CRM**, **Slack** and **Clay** connectors, like the other scheduled reports. No API keys needed. `lib.cli` only filters, dedupes, validates and formats (`leads-pending --zoho-json … --posted-text …`, `lead-render`).
+- The lead's message and the approve link are inserted by code straight from Zoho, never retyped by Claude. Each post carries `Zoho lead ID: <id>`, which is how later runs know it's done. Leads from before the go-live cutoff (`not_before` in the config) are never posted. If leads can't be posted, a ❌ note goes to `#webform` and they're retried next run.
+- Use Zoho `getRecords`, not COQL: COQL leaves out leads still waiting for approval.
 
-**Setup (one-off):**
-1. **Zoho:** go to [api-console.zoho.eu](https://api-console.zoho.eu) → Self Client, scope `ZohoCRM.modules.leads.READ`, and exchange the code for a refresh token. Ideally do this as a Zoho integration user, not a person. Add the secrets `ZOHO_CLIENT_ID`, `ZOHO_CLIENT_SECRET` and `ZOHO_REFRESH_TOKEN`.
-2. **Slack:** in a Slack app, add the **user** token scopes `chat:write` and `channels:history`, then install it as Satiesh. Add the `xoxp-…` token as the secret `SLACK_USER_TOKEN`.
-3. Add the secret `ANTHROPIC_API_KEY`.
-4. Go to Actions → *Web lead triage* → Run workflow: first `dry-run` (fixture leads), then `live`. Then uncomment the cron.
+**Later (optional): headless GitHub Actions run** (`.github/workflows/web-lead-triage.yml`, cron off). It doesn't depend on anyone's claude.ai connectors, but it needs these secrets:
+1. **Zoho:** go to [api-console.zoho.eu](https://api-console.zoho.eu) → Self Client, scope `ZohoCRM.modules.leads.READ`, ideally as a Zoho integration user. Add `ZOHO_CLIENT_ID`, `ZOHO_CLIENT_SECRET` and `ZOHO_REFRESH_TOKEN`.
+2. **Slack:** a user token (`chat:write`, `channels:history`) installed as Satiesh, added as `SLACK_USER_TOKEN`.
+3. Add `ANTHROPIC_API_KEY`.
 
 Try it locally: `python -m lib.cli leads-pending` (prints fixture leads in dry-run).
 

@@ -5,6 +5,9 @@ ZOHO_REFRESH_TOKEN) with scope ``ZohoCRM.modules.leads.READ``. Leads that are st
 waiting for approval are returned by the normal Leads API, so nothing here depends
 on anyone's mailbox.
 
+Scheduled runs currently use the claude.ai Zoho connector instead and hand the
+saved response to ``load_leads_file``; this client is for headless (CI) runs.
+
 In dry-run the client returns the fixture leads in ``tests/fixtures/web_leads.json``.
 """
 from __future__ import annotations
@@ -75,10 +78,25 @@ class ZohoClient:
         return data.get("data", [])
 
     def web_form_leads(self, now: datetime | None = None) -> list[dict]:
-        """Leads from the configured web-form sources, created within the lookback window."""
-        now = now or datetime.now(timezone.utc)
-        since = now - timedelta(days=self.cfg.get("lookback_days", 7))
-        sources = set(self.cfg["lead_sources"])
-        return [lead for lead in self.recent_leads()
-                if lead.get("Lead_Source") in sources
-                and datetime.fromisoformat(lead["Created_Time"]) >= since]
+        return filter_web_form(self.recent_leads(), now)
+
+
+def filter_web_form(leads: list[dict], now: datetime | None = None) -> list[dict]:
+    """Leads from the configured web-form sources, created within the lookback window."""
+    cfg = lead_triage_config()["zoho"]
+    now = now or datetime.now(timezone.utc)
+    since = now - timedelta(days=cfg.get("lookback_days", 7))
+    if cfg.get("not_before"):
+        since = max(since, datetime.fromisoformat(cfg["not_before"]))
+    sources = set(cfg["lead_sources"])
+    return [lead for lead in leads
+            if lead.get("Lead_Source") in sources
+            and datetime.fromisoformat(lead["Created_Time"]) >= since]
+
+
+def load_leads_file(path) -> list[dict]:
+    """Leads saved from the Zoho connector (getRecords): the `data` list, or the whole response."""
+    data = json.loads(open(path, encoding="utf-8").read())
+    while isinstance(data, dict):  # unwrap {"status":..,"data":{"data":[..]}} / {"data":[..]}
+        data = data["data"]
+    return data
