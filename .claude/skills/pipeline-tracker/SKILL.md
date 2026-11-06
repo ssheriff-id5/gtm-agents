@@ -14,23 +14,38 @@ description: Refresh the Pipeline Tracker (Next 90 Days) Google Sheet from the C
 4. Colour-code manual-input columns with `SheetsClient.mark_manual_columns()`.
 5. Point it at the **test sheet** only. Run it several times and collect feedback before moving to the live sheet (Phase 5).
 
-## Required columns (decided)
-These are automated CRM columns: no colour-coding, never hand-edited in the sheet.
+## Required columns (decided): owner columns read through the Account
+No owner fields on Deals. The Account is the only source of truth, and the report reads it through the
+Deal's `Account_Name` lookup. These are automated CRM columns: no colour-coding, never hand-edited.
 Place them after Deal Owner, in this order:
 
-| Sheet column      | Zoho Deals field (API name) | Source of truth |
-|-------------------|-----------------------------|-----------------|
-| Deal Owner        | `Owner`                     | Deal            |
-| Technical Owner   | `Technical_Owner`           | Account `Technical_Account_Owner` (synced, read-only on Deal) |
-| Partnership Owner | `Partnership_Owner`         | Account `Additional_Commercial_Owner` (synced, read-only on Deal) |
-| Sales Engineer    | `Sales_Engineer`            | Account `Sales_Engineer` (synced, read-only on Deal) |
+| Sheet column      | COQL field on Deals                          |
+|-------------------|----------------------------------------------|
+| Deal Owner        | `Owner`                                      |
+| Technical Owner   | `Account_Name.Technical_Account_Owner`       |
+| Partnership Owner | `Account_Name.Additional_Commercial_Owner`   |
+| Sales Engineer    | `Account_Name.Sales_Engineer`                |
 
-- Write the user's **name** (`.name` of the lookup), not the ID.
-- Blank in the CRM → leave the cell blank. Don't fill it from anywhere else. The sync runbook is `docs/zoho/deal-owner-sync.md`.
-- If the Deal fields aren't live yet, read the same values via the Account lookup instead
-  (COQL: `Account_Name.Technical_Account_Owner`, `Account_Name.Additional_Commercial_Owner`, `Account_Name.Sales_Engineer`).
-  Same values, no duplication.
-- Confirm the API names against Zoho before the first run (they're generated when the fields are created).
+```sql
+select Deal_Name, Stage, Closing_Date, Owner, Account_Name,
+       Account_Name.Technical_Account_Owner,
+       Account_Name.Additional_Commercial_Owner,
+       Account_Name.Sales_Engineer
+from Deals
+where Closing_Date between '<today>' and '<today+90>'
+  and Stage not in ('Closed won','Closed Lost','Closed won - Canceled','Closed won - Did Not Renew')
+limit 200   -- page with offset if more_records = true
+```
+(Tested 2026-11-06, read-only. COQL rejects `not like` on Stage, so list the closed stages explicitly.)
+
+- Write the user's **name**, not the ID. Some lookups come back with `name: null` (seen for user ids
+  `162380000075776001` and `162380000016377001`, probably deactivated users). Resolve the name via the
+  Zoho Users API. If it still can't be resolved, write `Unknown user (<id>)`. Never leave a value that
+  exists looking blank.
+- Blank on the Account → blank cell. Don't fill it from anywhere else and don't raise an Input Request
+  per blank. Report the count of open deals missing each owner in the Slack thread instead.
+- Values always reflect the Account **today**. Closed/historical deals show the current owner, not
+  the owner at close. That's fine for a forward-looking 90-day report.
 
 ## To fill in when porting
 - Test sheet ID / live sheet ID
